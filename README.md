@@ -1,4 +1,4 @@
-# Visual Timer
+# Redrunner
 
 A native macOS visual countdown timer inspired by the Time Timer style.
 
