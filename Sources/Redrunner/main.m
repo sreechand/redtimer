@@ -4,7 +4,8 @@
 #import <unistd.h>
 
 static const NSTimeInterval VTMaximumDuration = 60 * 60;
-static NSString * const VTNotificationIdentifier = @"visual-timer-expiration";
+static NSString * const VTAppDisplayName = @"redrunner";
+static NSString * const VTNotificationIdentifier = @"redrunner-expiration";
 static NSString * const VTKeyConfiguredDuration = @"timer.configuredDuration";
 static NSString * const VTKeyRemaining = @"timer.remaining";
 static NSString * const VTKeyRunning = @"timer.isRunning";
@@ -12,9 +13,10 @@ static NSString * const VTKeyDeadline = @"timer.deadline";
 static NSString * const VTKeyPinned = @"preferences.isPinned";
 static NSString * const VTKeySilent = @"preferences.isSilent";
 static NSString * const VTKeyHaptics = @"preferences.hapticsEnabled";
+static NSString * const VTTimerModelDidChangeNotification = @"VTTimerModelDidChangeNotification";
 
 static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath) {
-    if (getppid() == 1 || getenv("VISUAL_TIMER_ALLOW_RAW_LAUNCH")) {
+    if (getppid() == 1 || getenv("REDRUNNER_ALLOW_RAW_LAUNCH")) {
         return NO;
     }
 
@@ -43,7 +45,9 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
     task.arguments = @[@"-n", bundlePath];
     [task launch];
 
-    fprintf(stderr, "VisualTimer is a macOS app bundle. Reopening %s through LaunchServices.\n", bundlePath.UTF8String);
+    fprintf(stderr, "%s is a macOS app bundle. Reopening %s through LaunchServices.\n",
+            VTAppDisplayName.UTF8String,
+            bundlePath.UTF8String);
     return YES;
 }
 
@@ -68,6 +72,7 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 - (void)start;
 - (void)pause;
 - (void)reset;
+- (void)setDurationMinutes:(CGFloat)minutes;
 - (void)setDurationFromPoint:(NSPoint)point inSize:(NSSize)size;
 @end
 
@@ -271,8 +276,8 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
     [self cancelExpirationNotification];
 
     UNMutableNotificationContent *content = [UNMutableNotificationContent new];
-    content.title = @"Timer complete";
-    content.body = @"Your visual timer is done.";
+    content.title = [NSString stringWithFormat:@"%@ complete", VTAppDisplayName];
+    content.body = @"Your redrunner timer is done.";
     if (soundEnabled) {
         content.sound = UNNotificationSound.defaultSound;
     }
@@ -313,6 +318,7 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 }
 
 - (void)notifyChanged {
+    [NSNotificationCenter.defaultCenter postNotificationName:VTTimerModelDidChangeNotification object:self];
     [self.delegate timerModelDidChange:self];
 }
 
@@ -677,14 +683,21 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 
 @end
 
-@interface VTAppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
+@interface VTAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate>
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) VTTimerModel *model;
+@property (nonatomic, strong) NSStatusItem *statusItem;
+@property (nonatomic, strong) NSMenu *statusMenu;
+@property (nonatomic, strong) NSMenuItem *statusRemainingItem;
+@property (nonatomic, strong) NSMenuItem *statusStartPauseItem;
+@property (nonatomic, strong) NSMenuItem *statusPinItem;
+@property (nonatomic, strong) NSMenuItem *statusSilentItem;
 @end
 
 @implementation VTAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    [self installAppIcon];
     [self installMenu];
 
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
@@ -692,13 +705,14 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
                                                                       completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
 
     self.model = [VTTimerModel new];
+    [self installStatusItem];
 
     NSRect frame = NSMakeRect(0, 0, 520, 660);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
-    self.window.title = @"Visual Timer";
+    self.window.title = VTAppDisplayName;
     self.window.releasedWhenClosed = NO;
     self.window.minSize = NSMakeSize(430, 580);
     self.window.contentView = [[VTRootView alloc] initWithModel:self.model];
@@ -707,6 +721,20 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [NSApp activateIgnoringOtherApps:YES];
+
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(timerModelDidChange:)
+                                               name:VTTimerModelDidChangeNotification
+                                             object:self.model];
+    [self updateStatusItem];
+}
+
+- (void)installAppIcon {
+    NSString *iconPath = [NSBundle.mainBundle pathForResource:@"redrunner" ofType:@"icns"];
+    NSImage *icon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    if (icon) {
+        NSApp.applicationIconImage = icon;
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -718,6 +746,164 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
         [self.window makeKeyAndOrderFront:nil];
     }
     return YES;
+}
+
+- (void)timerModelDidChange:(NSNotification *)notification {
+    [self updateStatusItem];
+}
+
+- (void)installStatusItem {
+    self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+
+    NSStatusBarButton *button = self.statusItem.button;
+    button.toolTip = VTAppDisplayName;
+    button.imagePosition = NSImageLeading;
+    if (@available(macOS 11.0, *)) {
+        NSImage *image = [NSImage imageWithSystemSymbolName:@"timer" accessibilityDescription:VTAppDisplayName];
+        image.template = YES;
+        button.image = image;
+    }
+
+    self.statusMenu = [NSMenu new];
+    self.statusMenu.delegate = self;
+
+    self.statusRemainingItem = [[NSMenuItem alloc] initWithTitle:@"Ready"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+    self.statusRemainingItem.enabled = NO;
+    [self.statusMenu addItem:self.statusRemainingItem];
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    self.statusStartPauseItem = [[NSMenuItem alloc] initWithTitle:@"Start"
+                                                           action:@selector(statusStartPausePressed:)
+                                                    keyEquivalent:@""];
+    self.statusStartPauseItem.target = self;
+    [self.statusMenu addItem:self.statusStartPauseItem];
+
+    NSMenuItem *resetItem = [[NSMenuItem alloc] initWithTitle:@"Reset"
+                                                       action:@selector(statusResetPressed:)
+                                                keyEquivalent:@""];
+    resetItem.target = self;
+    [self.statusMenu addItem:resetItem];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *addOne = [[NSMenuItem alloc] initWithTitle:@"Add 1 Minute"
+                                                    action:@selector(statusAddOneMinute:)
+                                             keyEquivalent:@""];
+    addOne.target = self;
+    [self.statusMenu addItem:addOne];
+
+    NSMenuItem *addFive = [[NSMenuItem alloc] initWithTitle:@"Add 5 Minutes"
+                                                     action:@selector(statusAddFiveMinutes:)
+                                              keyEquivalent:@""];
+    addFive.target = self;
+    [self.statusMenu addItem:addFive];
+
+    NSMenuItem *addFifteen = [[NSMenuItem alloc] initWithTitle:@"Add 15 Minutes"
+                                                        action:@selector(statusAddFifteenMinutes:)
+                                                 keyEquivalent:@""];
+    addFifteen.target = self;
+    [self.statusMenu addItem:addFifteen];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *showWindowItem = [[NSMenuItem alloc] initWithTitle:@"Show Timer"
+                                                            action:@selector(statusShowWindow:)
+                                                     keyEquivalent:@""];
+    showWindowItem.target = self;
+    [self.statusMenu addItem:showWindowItem];
+
+    self.statusPinItem = [[NSMenuItem alloc] initWithTitle:@"Pin Window on Top"
+                                                    action:@selector(statusPinPressed:)
+                                             keyEquivalent:@""];
+    self.statusPinItem.target = self;
+    [self.statusMenu addItem:self.statusPinItem];
+
+    self.statusSilentItem = [[NSMenuItem alloc] initWithTitle:@"Silent Mode"
+                                                       action:@selector(statusSilentPressed:)
+                                                keyEquivalent:@""];
+    self.statusSilentItem.target = self;
+    [self.statusMenu addItem:self.statusSilentItem];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Quit %@", VTAppDisplayName]
+                                                      action:@selector(terminate:)
+                                               keyEquivalent:@"q"];
+    quitItem.target = NSApp;
+    [self.statusMenu addItem:quitItem];
+
+    self.statusItem.menu = self.statusMenu;
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    [self updateStatusItem];
+}
+
+- (void)updateStatusItem {
+    if (!self.statusItem) { return; }
+
+    self.statusItem.button.title = [self shortMenuBarTitle];
+    self.statusRemainingItem.title = [NSString stringWithFormat:@"%@ - %@",
+                                      self.model.statusText,
+                                      self.model.formattedRemaining];
+    self.statusStartPauseItem.title = self.model.running ? @"Pause" : @"Start";
+    self.statusStartPauseItem.enabled = self.model.remaining > 0;
+    self.statusPinItem.state = self.model.pinned ? NSControlStateValueOn : NSControlStateValueOff;
+    self.statusSilentItem.state = self.model.silent ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (NSString *)shortMenuBarTitle {
+    NSInteger totalSeconds = MAX(0, (NSInteger)ceil(self.model.remaining));
+    if (totalSeconds <= 0) {
+        return @"0m";
+    }
+
+    NSInteger minutes = (NSInteger)ceil((double)totalSeconds / 60.0);
+    return [NSString stringWithFormat:@"%ldm", minutes];
+}
+
+- (void)statusStartPausePressed:(id)sender {
+    [self.model toggleStartPause];
+}
+
+- (void)statusResetPressed:(id)sender {
+    [self.model reset];
+}
+
+- (void)statusAddOneMinute:(id)sender {
+    [self addMinutesFromStatusItem:1];
+}
+
+- (void)statusAddFiveMinutes:(id)sender {
+    [self addMinutesFromStatusItem:5];
+}
+
+- (void)statusAddFifteenMinutes:(id)sender {
+    [self addMinutesFromStatusItem:15];
+}
+
+- (void)addMinutesFromStatusItem:(NSInteger)minutes {
+    BOOL wasRunning = self.model.running;
+    NSTimeInterval newRemaining = MIN(VTMaximumDuration, self.model.remaining + minutes * 60);
+    [self.model setDurationMinutes:newRemaining / 60.0];
+    if (wasRunning) {
+        [self.model start];
+    }
+}
+
+- (void)statusShowWindow:(id)sender {
+    [self.window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)statusPinPressed:(id)sender {
+    self.model.pinned = !self.model.pinned;
+}
+
+- (void)statusSilentPressed:(id)sender {
+    self.model.silent = !self.model.silent;
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center

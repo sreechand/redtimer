@@ -3,9 +3,22 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>Resources/redrunner.icns</key>
+		<data>
+		bsMdTrsoJ0Gt/+638HLkatXkTcw=
+		</data>
+	</dict>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>Resources/redrunner.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			BbOpjoj7OBLr15b7nAFahJmuMU75ShWlMzMWdjoDmyA=
+			</data>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
 		<key>^Resources/</key>
