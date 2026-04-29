@@ -7,6 +7,8 @@ BUNDLE_ID="com.codex.redrunner"
 MIN_SYSTEM_VERSION="14.0"
 APP_ICON_SOURCE="Resources/redrunner.icns"
 APP_ICON_FILE="redrunner.icns"
+MENU_BAR_ICON_SOURCE="Resources/redrunner_menubar.png"
+MENU_BAR_ICON_FILE="redrunner_menubar.png"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -16,6 +18,7 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 APP_ICON_PATH="$ROOT_DIR/$APP_ICON_SOURCE"
+MENU_BAR_ICON_PATH="$ROOT_DIR/$MENU_BAR_ICON_SOURCE"
 
 cd "$ROOT_DIR"
 mkdir -p "$DIST_DIR"
@@ -30,7 +33,12 @@ if [[ ! -f "$APP_ICON_PATH" ]]; then
   echo "missing app icon: $APP_ICON_SOURCE" >&2
   exit 1
 fi
+if [[ ! -f "$MENU_BAR_ICON_PATH" ]]; then
+  echo "missing menu bar icon: $MENU_BAR_ICON_SOURCE" >&2
+  exit 1
+fi
 cp "$APP_ICON_PATH" "$APP_CONTENTS/Resources/$APP_ICON_FILE"
+cp "$MENU_BAR_ICON_PATH" "$APP_CONTENTS/Resources/$MENU_BAR_ICON_FILE"
 
 clang -fobjc-arc \
   "$ROOT_DIR/Sources/Redrunner/main.m" \
