@@ -1,6 +1,6 @@
-# Redrunner
+# redrunner
 
-A native macOS visual countdown timer inspired by the Time Timer style.
+A native macOS countdown timer inspired by the Time Timer style.
 
 ## Run
 
@@ -13,7 +13,7 @@ Build the app:
 The app bundle is created at:
 
 ```text
-dist/VisualTimer.app
+dist/redrunner.app
 ```
 
 The default run command is:
@@ -22,8 +22,8 @@ The default run command is:
 ./script/build_and_run.sh
 ```
 
-Do not launch `Contents/MacOS/VisualTimer` directly. It is the app bundle's
-internal executable; the app should be opened through `VisualTimer.app`,
+Do not launch `Contents/MacOS/redrunner` directly. It is the app bundle's
+internal executable; the app should be opened through `redrunner.app`,
 Finder, or the run script.
 
 ## Controls
@@ -34,3 +34,4 @@ Finder, or the run script.
 - Pin keeps the window floating above other windows.
 - Silent disables the completion sound.
 - Haptic enables a trackpad haptic pulse at completion.
+- The menu bar item shows the remaining minutes and provides quick actions.

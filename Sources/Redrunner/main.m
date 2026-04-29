@@ -4,7 +4,9 @@
 #import <unistd.h>
 
 static const NSTimeInterval VTMaximumDuration = 60 * 60;
-static NSString * const VTNotificationIdentifier = @"visual-timer-expiration";
+static NSString * const VTAppDisplayName = @"redrunner";
+static NSString * const VTNotificationIdentifier = @"redrunner-expiration";
+static NSString * const VTMenuBarIconName = @"redrunner_menubar";
 static NSString * const VTKeyConfiguredDuration = @"timer.configuredDuration";
 static NSString * const VTKeyRemaining = @"timer.remaining";
 static NSString * const VTKeyRunning = @"timer.isRunning";
@@ -12,9 +14,10 @@ static NSString * const VTKeyDeadline = @"timer.deadline";
 static NSString * const VTKeyPinned = @"preferences.isPinned";
 static NSString * const VTKeySilent = @"preferences.isSilent";
 static NSString * const VTKeyHaptics = @"preferences.hapticsEnabled";
+static NSString * const VTTimerModelDidChangeNotification = @"VTTimerModelDidChangeNotification";
 
 static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath) {
-    if (getppid() == 1 || getenv("VISUAL_TIMER_ALLOW_RAW_LAUNCH")) {
+    if (getppid() == 1 || getenv("REDRUNNER_ALLOW_RAW_LAUNCH")) {
         return NO;
     }
 
@@ -43,7 +46,9 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
     task.arguments = @[@"-n", bundlePath];
     [task launch];
 
-    fprintf(stderr, "VisualTimer is a macOS app bundle. Reopening %s through LaunchServices.\n", bundlePath.UTF8String);
+    fprintf(stderr, "%s is a macOS app bundle. Reopening %s through LaunchServices.\n",
+            VTAppDisplayName.UTF8String,
+            bundlePath.UTF8String);
     return YES;
 }
 
@@ -68,6 +73,7 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 - (void)start;
 - (void)pause;
 - (void)reset;
+- (void)setDurationMinutes:(CGFloat)minutes;
 - (void)setDurationFromPoint:(NSPoint)point inSize:(NSSize)size;
 @end
 
@@ -271,8 +277,8 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
     [self cancelExpirationNotification];
 
     UNMutableNotificationContent *content = [UNMutableNotificationContent new];
-    content.title = @"Timer complete";
-    content.body = @"Your visual timer is done.";
+    content.title = [NSString stringWithFormat:@"%@ complete", VTAppDisplayName];
+    content.body = @"Your redrunner timer is done.";
     if (soundEnabled) {
         content.sound = UNNotificationSound.defaultSound;
     }
@@ -313,6 +319,7 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 }
 
 - (void)notifyChanged {
+    [NSNotificationCenter.defaultCenter postNotificationName:VTTimerModelDidChangeNotification object:self];
     [self.delegate timerModelDidChange:self];
 }
 
@@ -320,6 +327,10 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 
 @interface VTTimerFaceView : NSView
 @property (nonatomic, strong) VTTimerModel *model;
+@property (nonatomic, strong) NSTextField *readoutLabel;
+@property (nonatomic, strong) NSButton *pauseButton;
+@property (nonatomic, strong) NSButton *pinButton;
+- (void)updateOverlay;
 @end
 
 @implementation VTTimerFaceView
@@ -329,6 +340,8 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
     if (!self) { return nil; }
     _model = model;
     self.wantsLayer = YES;
+    [self buildSubviews];
+    [self updateOverlay];
     return self;
 }
 
@@ -347,6 +360,105 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 - (void)updateDurationWithEvent:(NSEvent *)event {
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
     [self.model setDurationFromPoint:point inSize:self.bounds.size];
+    [self.model start];
+}
+
+- (void)buildSubviews {
+    self.readoutLabel = [NSTextField labelWithString:@"00:00"];
+    self.readoutLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.readoutLabel.alignment = NSTextAlignmentCenter;
+    self.readoutLabel.textColor = [NSColor colorWithWhite:0 alpha:0.82];
+    self.readoutLabel.font = [NSFont monospacedDigitSystemFontOfSize:64 weight:NSFontWeightBold];
+
+    self.pauseButton = [NSButton buttonWithTitle:@"" target:self action:@selector(pausePressed:)];
+    self.pauseButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pauseButton.bordered = NO;
+    self.pauseButton.imagePosition = NSImageOnly;
+    self.pauseButton.wantsLayer = YES;
+    self.pauseButton.layer.backgroundColor = [NSColor colorWithWhite:0.28 alpha:0.82].CGColor;
+    self.pauseButton.layer.shadowColor = [NSColor.blackColor colorWithAlphaComponent:0.18].CGColor;
+    self.pauseButton.layer.shadowOpacity = 1;
+    self.pauseButton.layer.shadowRadius = 10;
+    self.pauseButton.layer.shadowOffset = NSMakeSize(0, -3);
+    if (@available(macOS 11.0, *)) {
+        self.pauseButton.contentTintColor = NSColor.whiteColor;
+    }
+
+    self.pinButton = [NSButton buttonWithTitle:@"" target:self action:@selector(pinPressed:)];
+    self.pinButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pinButton.bordered = NO;
+    self.pinButton.imagePosition = NSImageOnly;
+    self.pinButton.wantsLayer = YES;
+    self.pinButton.layer.backgroundColor = [NSColor colorWithWhite:1 alpha:0.92].CGColor;
+    self.pinButton.layer.shadowColor = [NSColor.blackColor colorWithAlphaComponent:0.12].CGColor;
+    self.pinButton.layer.shadowOpacity = 1;
+    self.pinButton.layer.shadowRadius = 6;
+    self.pinButton.layer.shadowOffset = NSMakeSize(0, -2);
+    if (@available(macOS 11.0, *)) {
+        self.pinButton.contentTintColor = [NSColor colorWithWhite:0.18 alpha:0.92];
+    }
+
+    [self addSubview:self.readoutLabel];
+    [self addSubview:self.pauseButton];
+    [self addSubview:self.pinButton];
+}
+
+- (void)layout {
+    [super layout];
+
+    CGFloat side = MIN(NSWidth(self.bounds), NSHeight(self.bounds));
+    NSRect square = NSMakeRect((NSWidth(self.bounds) - side) / 2,
+                               (NSHeight(self.bounds) - side) / 2,
+                               side,
+                               side);
+
+    CGFloat readoutWidth = side * 0.42;
+    CGFloat readoutHeight = side * 0.12;
+    self.readoutLabel.frame = NSMakeRect(NSMidX(square) - readoutWidth / 2,
+                                         NSMinY(square) + side * 0.28,
+                                         readoutWidth,
+                                         readoutHeight);
+    self.readoutLabel.font = [NSFont monospacedDigitSystemFontOfSize:MAX(34, side * 0.11)
+                                                              weight:NSFontWeightBold];
+
+    CGFloat buttonSide = side * 0.096;
+    self.pauseButton.frame = NSMakeRect(NSMidX(square) - buttonSide / 2,
+                                        NSMinY(square) + side * 0.64,
+                                        buttonSide,
+                                        buttonSide);
+    self.pauseButton.layer.cornerRadius = buttonSide / 2;
+
+    CGFloat pinSide = side * 0.05;
+    CGFloat pinInset = side * 0.04;
+    self.pinButton.frame = NSMakeRect(NSMaxX(square) - pinInset - pinSide,
+                                      NSMinY(square) + pinInset,
+                                      pinSide,
+                                      pinSide);
+    self.pinButton.layer.cornerRadius = pinSide / 2;
+}
+
+- (void)pausePressed:(id)sender {
+    [self.model toggleStartPause];
+}
+
+- (void)pinPressed:(id)sender {
+    self.model.pinned = !self.model.pinned;
+}
+
+- (void)updateOverlay {
+    self.readoutLabel.stringValue = self.model.formattedRemaining;
+    self.pauseButton.enabled = self.model.remaining > 0;
+    self.pauseButton.alphaValue = self.pauseButton.enabled ? 1.0 : 0.45;
+    if (@available(macOS 11.0, *)) {
+        NSString *symbolName = self.model.running ? @"pause.fill" : @"play.fill";
+        NSImage *symbol = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
+        self.pauseButton.image = symbol;
+
+        NSString *pinSymbolName = self.model.pinned ? @"pin.fill" : @"pin";
+        NSImage *pinSymbol = [NSImage imageWithSystemSymbolName:pinSymbolName accessibilityDescription:nil];
+        self.pinButton.image = pinSymbol;
+    }
+    self.pinButton.alphaValue = self.model.pinned ? 1.0 : 0.8;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
@@ -497,26 +609,19 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 
 @interface VTRootView : NSView <VTTimerModelDelegate>
 @property (nonatomic, strong) VTTimerModel *model;
-@property (nonatomic, strong) NSTextField *readoutLabel;
-@property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) VTTimerFaceView *faceView;
-@property (nonatomic, strong) NSButton *pinButton;
-@property (nonatomic, strong) NSButton *startButton;
-@property (nonatomic, strong) NSButton *resetButton;
-@property (nonatomic, strong) NSButton *silentButton;
-@property (nonatomic, strong) NSButton *hapticButton;
 @end
 
 @implementation VTRootView
 
 - (instancetype)initWithModel:(VTTimerModel *)model {
-    self = [super initWithFrame:NSMakeRect(0, 0, 520, 660)];
+    self = [super initWithFrame:NSMakeRect(0, 0, 620, 620)];
     if (!self) { return nil; }
 
     _model = model;
     _model.delegate = self;
     self.wantsLayer = YES;
-    self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
 
     [self buildSubviews];
     [self updateUI];
@@ -542,104 +647,16 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 }
 
 - (void)buildSubviews {
-    self.readoutLabel = [self labelWithFont:[NSFont monospacedDigitSystemFontOfSize:44 weight:NSFontWeightBold]
-                                      color:NSColor.labelColor];
-    self.statusLabel = [self labelWithFont:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
-                                     color:NSColor.secondaryLabelColor];
-
-    self.pinButton = [self checkboxWithTitle:@"Pin" action:@selector(pinChanged:)];
     self.faceView = [[VTTimerFaceView alloc] initWithModel:self.model];
     self.faceView.translatesAutoresizingMaskIntoConstraints = NO;
-
-    self.startButton = [self pushButtonWithTitle:@"Start" symbol:@"play.fill" action:@selector(startPausePressed:)];
-    self.startButton.keyEquivalent = @" ";
-    self.resetButton = [self pushButtonWithTitle:@"Reset" symbol:@"arrow.counterclockwise" action:@selector(resetPressed:)];
-
-    self.silentButton = [self checkboxWithTitle:@"Silent" action:@selector(silentChanged:)];
-    self.hapticButton = [self checkboxWithTitle:@"Haptic" action:@selector(hapticChanged:)];
-
-    for (NSView *view in @[self.readoutLabel, self.statusLabel, self.pinButton, self.faceView, self.startButton, self.resetButton, self.silentButton, self.hapticButton]) {
-        [self addSubview:view];
-    }
+    [self addSubview:self.faceView];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.readoutLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:24],
-        [self.readoutLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:22],
-
-        [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.readoutLabel.leadingAnchor],
-        [self.statusLabel.topAnchor constraintEqualToAnchor:self.readoutLabel.bottomAnchor constant:2],
-
-        [self.pinButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-24],
-        [self.pinButton.centerYAnchor constraintEqualToAnchor:self.readoutLabel.centerYAnchor],
-
-        [self.faceView.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:18],
-        [self.faceView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:24],
-        [self.faceView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-24],
-        [self.faceView.heightAnchor constraintEqualToAnchor:self.faceView.widthAnchor],
-
-        [self.startButton.topAnchor constraintEqualToAnchor:self.faceView.bottomAnchor constant:20],
-        [self.startButton.trailingAnchor constraintEqualToAnchor:self.centerXAnchor constant:-6],
-        [self.startButton.widthAnchor constraintGreaterThanOrEqualToConstant:112],
-
-        [self.resetButton.topAnchor constraintEqualToAnchor:self.startButton.topAnchor],
-        [self.resetButton.leadingAnchor constraintEqualToAnchor:self.centerXAnchor constant:6],
-        [self.resetButton.widthAnchor constraintGreaterThanOrEqualToConstant:112],
-
-        [self.silentButton.topAnchor constraintEqualToAnchor:self.startButton.bottomAnchor constant:16],
-        [self.silentButton.trailingAnchor constraintEqualToAnchor:self.centerXAnchor constant:-9],
-
-        [self.hapticButton.centerYAnchor constraintEqualToAnchor:self.silentButton.centerYAnchor],
-        [self.hapticButton.leadingAnchor constraintEqualToAnchor:self.centerXAnchor constant:9],
-        [self.hapticButton.bottomAnchor constraintLessThanOrEqualToAnchor:self.bottomAnchor constant:-20]
+        [self.faceView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [self.faceView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [self.faceView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [self.faceView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
     ]];
-}
-
-- (NSTextField *)labelWithFont:(NSFont *)font color:(NSColor *)color {
-    NSTextField *label = [NSTextField labelWithString:@""];
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.font = font;
-    label.textColor = color;
-    return label;
-}
-
-- (NSButton *)pushButtonWithTitle:(NSString *)title symbol:(NSString *)symbol action:(SEL)action {
-    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.bezelStyle = NSBezelStyleRounded;
-    button.controlSize = NSControlSizeLarge;
-    if (@available(macOS 11.0, *)) {
-        button.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil];
-        button.imagePosition = NSImageLeading;
-    }
-    return button;
-}
-
-- (NSButton *)checkboxWithTitle:(NSString *)title action:(SEL)action {
-    NSButton *button = [NSButton checkboxWithTitle:title target:self action:action];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.controlSize = NSControlSizeSmall;
-    return button;
-}
-
-- (void)pinChanged:(NSButton *)sender {
-    self.model.pinned = sender.state == NSControlStateValueOn;
-    [self applyWindowPin];
-}
-
-- (void)silentChanged:(NSButton *)sender {
-    self.model.silent = sender.state == NSControlStateValueOn;
-}
-
-- (void)hapticChanged:(NSButton *)sender {
-    self.model.hapticsEnabled = sender.state == NSControlStateValueOn;
-}
-
-- (void)startPausePressed:(NSButton *)sender {
-    [self.model toggleStartPause];
-}
-
-- (void)resetPressed:(NSButton *)sender {
-    [self.model reset];
 }
 
 - (void)timerModelDidChange:(VTTimerModel *)model {
@@ -647,20 +664,8 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 }
 
 - (void)updateUI {
-    self.readoutLabel.stringValue = self.model.formattedRemaining;
-    self.statusLabel.stringValue = self.model.statusText;
-
-    self.pinButton.state = self.model.pinned ? NSControlStateValueOn : NSControlStateValueOff;
-    self.silentButton.state = self.model.silent ? NSControlStateValueOn : NSControlStateValueOff;
-    self.hapticButton.state = self.model.hapticsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-
-    self.startButton.title = self.model.running ? @"Pause" : @"Start";
-    if (@available(macOS 11.0, *)) {
-        self.startButton.image = [NSImage imageWithSystemSymbolName:self.model.running ? @"pause.fill" : @"play.fill"
-                                           accessibilityDescription:nil];
-    }
-
     [self applyWindowPin];
+    [self.faceView updateOverlay];
     [self.faceView setNeedsDisplay:YES];
 }
 
@@ -677,14 +682,21 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
 
 @end
 
-@interface VTAppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
+@interface VTAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate>
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) VTTimerModel *model;
+@property (nonatomic, strong) NSStatusItem *statusItem;
+@property (nonatomic, strong) NSMenu *statusMenu;
+@property (nonatomic, strong) NSMenuItem *statusRemainingItem;
+@property (nonatomic, strong) NSMenuItem *statusStartPauseItem;
+@property (nonatomic, strong) NSMenuItem *statusPinItem;
+@property (nonatomic, strong) NSMenuItem *statusSilentItem;
 @end
 
 @implementation VTAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    [self installAppIcon];
     [self installMenu];
 
     UNUserNotificationCenter.currentNotificationCenter.delegate = self;
@@ -692,21 +704,37 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
                                                                       completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
 
     self.model = [VTTimerModel new];
+    [self installStatusItem];
 
-    NSRect frame = NSMakeRect(0, 0, 520, 660);
+    NSRect frame = NSMakeRect(0, 0, 620, 620);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
-    self.window.title = @"Visual Timer";
+    self.window.title = VTAppDisplayName;
     self.window.releasedWhenClosed = NO;
-    self.window.minSize = NSMakeSize(430, 580);
+    self.window.minSize = NSMakeSize(420, 420);
+    self.window.contentAspectRatio = NSMakeSize(1, 1);
     self.window.contentView = [[VTRootView alloc] initWithModel:self.model];
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
 
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [NSApp activateIgnoringOtherApps:YES];
+
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(timerModelDidChange:)
+                                               name:VTTimerModelDidChangeNotification
+                                             object:self.model];
+    [self updateStatusItem];
+}
+
+- (void)installAppIcon {
+    NSString *iconPath = [NSBundle.mainBundle pathForResource:@"redrunner" ofType:@"icns"];
+    NSImage *icon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    if (icon) {
+        NSApp.applicationIconImage = icon;
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -718,6 +746,173 @@ static BOOL VTRelaunchAppBundleIfRawExecutableLaunch(const char *executablePath)
         [self.window makeKeyAndOrderFront:nil];
     }
     return YES;
+}
+
+- (void)timerModelDidChange:(NSNotification *)notification {
+    [self updateStatusItem];
+}
+
+- (void)installStatusItem {
+    self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+    if (@available(macOS 10.12, *)) {
+        self.statusItem.visible = YES;
+    }
+
+    NSStatusBarButton *button = self.statusItem.button;
+    button.toolTip = VTAppDisplayName;
+    button.imagePosition = NSImageLeading;
+    NSString *iconPath = [NSBundle.mainBundle pathForResource:VTMenuBarIconName ofType:@"png"];
+    NSImage *image = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    if (image) {
+        image.size = NSMakeSize(18, 18);
+        image.template = NO;
+        button.image = image;
+    } else if (@available(macOS 11.0, *)) {
+        image = [NSImage imageWithSystemSymbolName:@"timer" accessibilityDescription:VTAppDisplayName];
+        image.template = YES;
+        button.image = image;
+    }
+
+    self.statusMenu = [NSMenu new];
+    self.statusMenu.delegate = self;
+
+    self.statusRemainingItem = [[NSMenuItem alloc] initWithTitle:@"Ready"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+    self.statusRemainingItem.enabled = NO;
+    [self.statusMenu addItem:self.statusRemainingItem];
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    self.statusStartPauseItem = [[NSMenuItem alloc] initWithTitle:@"Start"
+                                                           action:@selector(statusStartPausePressed:)
+                                                    keyEquivalent:@""];
+    self.statusStartPauseItem.target = self;
+    [self.statusMenu addItem:self.statusStartPauseItem];
+
+    NSMenuItem *resetItem = [[NSMenuItem alloc] initWithTitle:@"Reset"
+                                                       action:@selector(statusResetPressed:)
+                                                keyEquivalent:@""];
+    resetItem.target = self;
+    [self.statusMenu addItem:resetItem];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *addOne = [[NSMenuItem alloc] initWithTitle:@"Add 1 Minute"
+                                                    action:@selector(statusAddOneMinute:)
+                                             keyEquivalent:@""];
+    addOne.target = self;
+    [self.statusMenu addItem:addOne];
+
+    NSMenuItem *addFive = [[NSMenuItem alloc] initWithTitle:@"Add 5 Minutes"
+                                                     action:@selector(statusAddFiveMinutes:)
+                                              keyEquivalent:@""];
+    addFive.target = self;
+    [self.statusMenu addItem:addFive];
+
+    NSMenuItem *addFifteen = [[NSMenuItem alloc] initWithTitle:@"Add 15 Minutes"
+                                                        action:@selector(statusAddFifteenMinutes:)
+                                                 keyEquivalent:@""];
+    addFifteen.target = self;
+    [self.statusMenu addItem:addFifteen];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *showWindowItem = [[NSMenuItem alloc] initWithTitle:@"Show Timer"
+                                                            action:@selector(statusShowWindow:)
+                                                     keyEquivalent:@""];
+    showWindowItem.target = self;
+    [self.statusMenu addItem:showWindowItem];
+
+    self.statusPinItem = [[NSMenuItem alloc] initWithTitle:@"Pin Window on Top"
+                                                    action:@selector(statusPinPressed:)
+                                             keyEquivalent:@""];
+    self.statusPinItem.target = self;
+    [self.statusMenu addItem:self.statusPinItem];
+
+    self.statusSilentItem = [[NSMenuItem alloc] initWithTitle:@"Silent Mode"
+                                                       action:@selector(statusSilentPressed:)
+                                                keyEquivalent:@""];
+    self.statusSilentItem.target = self;
+    [self.statusMenu addItem:self.statusSilentItem];
+
+    [self.statusMenu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Quit %@", VTAppDisplayName]
+                                                      action:@selector(terminate:)
+                                               keyEquivalent:@"q"];
+    quitItem.target = NSApp;
+    [self.statusMenu addItem:quitItem];
+
+    self.statusItem.menu = self.statusMenu;
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    [self updateStatusItem];
+}
+
+- (void)updateStatusItem {
+    if (!self.statusItem) { return; }
+
+    self.statusItem.button.title = [self shortMenuBarTitle];
+    self.statusRemainingItem.title = [NSString stringWithFormat:@"%@ - %@",
+                                      self.model.statusText,
+                                      self.model.formattedRemaining];
+    self.statusStartPauseItem.title = self.model.running ? @"Pause" : @"Start";
+    self.statusStartPauseItem.enabled = self.model.remaining > 0;
+    self.statusPinItem.state = self.model.pinned ? NSControlStateValueOn : NSControlStateValueOff;
+    self.statusSilentItem.state = self.model.silent ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (NSString *)shortMenuBarTitle {
+    NSInteger totalSeconds = MAX(0, (NSInteger)ceil(self.model.remaining));
+    if (totalSeconds <= 0) {
+        return @"0m";
+    }
+
+    NSInteger minutes = (NSInteger)ceil((double)totalSeconds / 60.0);
+    return [NSString stringWithFormat:@"%ldm", minutes];
+}
+
+- (void)statusStartPausePressed:(id)sender {
+    [self.model toggleStartPause];
+}
+
+- (void)statusResetPressed:(id)sender {
+    [self.model reset];
+}
+
+- (void)statusAddOneMinute:(id)sender {
+    [self addMinutesFromStatusItem:1];
+}
+
+- (void)statusAddFiveMinutes:(id)sender {
+    [self addMinutesFromStatusItem:5];
+}
+
+- (void)statusAddFifteenMinutes:(id)sender {
+    [self addMinutesFromStatusItem:15];
+}
+
+- (void)addMinutesFromStatusItem:(NSInteger)minutes {
+    BOOL wasRunning = self.model.running;
+    NSTimeInterval newRemaining = MIN(VTMaximumDuration, self.model.remaining + minutes * 60);
+    [self.model setDurationMinutes:newRemaining / 60.0];
+    if (wasRunning) {
+        [self.model start];
+    }
+}
+
+- (void)statusShowWindow:(id)sender {
+    [self.window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)statusPinPressed:(id)sender {
+    self.model.pinned = !self.model.pinned;
+}
+
+- (void)statusSilentPressed:(id)sender {
+    self.model.silent = !self.model.silent;
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center

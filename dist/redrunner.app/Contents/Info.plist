@@ -5,11 +5,15 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleExecutable</key>
-  <string>VisualTimer</string>
+  <string>redrunner</string>
   <key>CFBundleIdentifier</key>
-  <string>com.codex.VisualTimer</string>
+  <string>com.codex.redrunner</string>
   <key>CFBundleName</key>
-  <string>VisualTimer</string>
+  <string>redrunner</string>
+  <key>CFBundleDisplayName</key>
+  <string>redrunner</string>
+  <key>CFBundleIconFile</key>
+  <string>redrunner.icns</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

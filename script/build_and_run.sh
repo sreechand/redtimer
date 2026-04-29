@@ -2,9 +2,13 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="VisualTimer"
-BUNDLE_ID="com.codex.VisualTimer"
+APP_NAME="redrunner"
+BUNDLE_ID="com.codex.redrunner"
 MIN_SYSTEM_VERSION="14.0"
+APP_ICON_SOURCE="Resources/redrunner.icns"
+APP_ICON_FILE="redrunner.icns"
+MENU_BAR_ICON_SOURCE="Resources/redrunner_menubar.png"
+MENU_BAR_ICON_FILE="redrunner_menubar.png"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -13,6 +17,8 @@ APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+APP_ICON_PATH="$ROOT_DIR/$APP_ICON_SOURCE"
+MENU_BAR_ICON_PATH="$ROOT_DIR/$MENU_BAR_ICON_SOURCE"
 
 cd "$ROOT_DIR"
 mkdir -p "$DIST_DIR"
@@ -21,9 +27,21 @@ pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS"
+mkdir -p "$APP_CONTENTS/Resources"
+
+if [[ ! -f "$APP_ICON_PATH" ]]; then
+  echo "missing app icon: $APP_ICON_SOURCE" >&2
+  exit 1
+fi
+if [[ ! -f "$MENU_BAR_ICON_PATH" ]]; then
+  echo "missing menu bar icon: $MENU_BAR_ICON_SOURCE" >&2
+  exit 1
+fi
+cp "$APP_ICON_PATH" "$APP_CONTENTS/Resources/$APP_ICON_FILE"
+cp "$MENU_BAR_ICON_PATH" "$APP_CONTENTS/Resources/$MENU_BAR_ICON_FILE"
 
 clang -fobjc-arc \
-  "$ROOT_DIR/Sources/VisualTimer/main.m" \
+  "$ROOT_DIR/Sources/Redrunner/main.m" \
   -o "$APP_BINARY" \
   -framework Cocoa \
   -framework UserNotifications
@@ -41,6 +59,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>$APP_ICON_FILE</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -58,7 +80,9 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
 printf 'APPL????' >"$APP_CONTENTS/PkgInfo"
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 codesign --force --sign - "$APP_BUNDLE" >/dev/null
 
 open_app() {
